@@ -29,17 +29,6 @@ jobs:
               return;
             }
 
-            try {
-              await github.rest.issues.getLabel({ owner, repo, name: 'duplicate-pr' });
-            } catch (e) {
-              if (e.status === 404) {
-                await github.rest.issues.createLabel({
-                  owner, repo, name: 'duplicate-pr', color: 'cfd3d7',
-                  description: 'Duplicate PR — another PR targets the same issue',
-                });
-              }
-            }
-
             const pattern = /(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*#(\d+)/gi;
             const linked = [...new Set([...body.matchAll(pattern)].map(m => parseInt(m[1])))];
 
@@ -48,16 +37,22 @@ jobs:
               return;
             }
 
+            const { data: allPrs } = await github.rest.pulls.list({
+              owner, repo, state: 'open', per_page: 100
+            });
+
             const duplicates = [];
 
-            for (const issueNum of linked) {
-              const { data: results } = await github.rest.search.issuesAndPullRequests({
-                q: 'repo:' + owner + '/' + repo + ' is:pr is:open Closes #' + issueNum,
-              });
-
-              for (const item of results.items) {
-                if (item.number !== num) {
-                  duplicates.push({ pr: item.number, issue: issueNum, title: item.title });
+            for (const other of allPrs) {
+              if (other.number === num) continue;
+              const otherBody = (other.body || '').toLowerCase();
+              for (const issueNum of linked) {
+                const refPattern = new RegExp(
+                  '(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s*:?\\s*#' + issueNum + '\\b', 'i'
+                );
+                if (refPattern.test(otherBody)) {
+                  duplicates.push({ pr: other.number, issue: issueNum, title: other.title });
+                  break;
                 }
               }
             }
@@ -65,11 +60,6 @@ jobs:
             if (duplicates.length === 0) {
               console.log('No duplicate PRs found for #' + num);
               return;
-            }
-
-            const { data: existingLabels } = await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number: num });
-            if (!existingLabels.some(l => l.name === 'duplicate-pr')) {
-              await github.rest.issues.addLabels({ owner, repo, issue_number: num, labels: ['duplicate-pr'] });
             }
 
             const list = duplicates
